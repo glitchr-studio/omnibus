@@ -76,6 +76,8 @@ final class GatewayTest extends TestCase
 
         self::assertSame($registry->get('boutique'), $registry->get('boutique'));
         self::assertTrue($registry->has('boutique'));
+        self::assertSame(['token' => 't'], $registry->options('boutique'));
+        self::assertNotSame($registry->get('boutique'), $registry->create('boutique', ['token' => 'u']), 'with overrides: a fresh gateway');
 
         $this->expectException(InvalidConfigException::class);
         $this->expectExceptionMessage('No "entrepot" gateway; configured: boutique.');

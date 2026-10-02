@@ -47,6 +47,27 @@ final class Registry
         return isset($this->config[$name]);
     }
 
+    /** @return array<string, mixed> the options a gateway is configured with */
+    public function options(string $name): array
+    {
+        return $this->config[$name]['options'] ?? [];
+    }
+
+    /**
+     * A gateway built afresh, its configured options with $overrides over
+     * them - keys typed in a back office, say. Not kept: get() still gives
+     * the configured one.
+     *
+     * @param array<string, mixed> $overrides
+     */
+    public function create(string $name, array $overrides = []): GatewayInterface
+    {
+        $gateway = $this->config[$name] ?? throw new InvalidConfigException(\sprintf('No "%s" gateway; configured: %s.', $name, implode(', ', array_keys($this->config)) ?: 'none'));
+        $factory = $this->factories[$gateway['factory']] ?? throw new InvalidConfigException(\sprintf('No "%s" factory for the "%s" gateway; installed: %s.', $gateway['factory'], $name, implode(', ', array_keys($this->factories)) ?: 'none'));
+
+        return $factory->create(array_replace($gateway['options'] ?? [], $overrides));
+    }
+
     /** @return list<string> the configured gateways' names */
     public function names(): array
     {
