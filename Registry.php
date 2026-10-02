@@ -47,6 +47,12 @@ final class Registry
         return isset($this->config[$name]);
     }
 
+    /** @return list<string> the configured gateways' names */
+    public function names(): array
+    {
+        return array_keys($this->config);
+    }
+
     /** @return array<string, GatewayInterface> */
     public function all(): array
     {
