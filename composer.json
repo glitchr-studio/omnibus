@@ -29,17 +29,20 @@
         "symfony/http-kernel": "^6.4|^7.0|^8.0"
     },
     "suggest": {
-        "symfony/http-client": "The HTTP client the carriers talk through",
         "omnibus/offline": "Delivery without a carrier: collected, delivered by hand, a flat rate",
         "omnibus/mondial-relay": "Mondial Relay: relay points, labels, tracking",
-        "omnibus/colissimo": "Colissimo (La Poste)"
+        "omnibus/colissimo": "Colissimo (La Poste)",
+        "symfony/config": "In a Symfony application: the configuration of Omnibus\\Bridge\\Symfony\\OmnibusBundle",
+        "symfony/dependency-injection": "In a Symfony application: the services of Omnibus\\Bridge\\Symfony\\OmnibusBundle",
+        "symfony/http-kernel": "In a Symfony application: Omnibus\\Bridge\\Symfony\\OmnibusBundle itself"
     },
     "autoload": {
         "psr-4": {
             "Omnibus\\": ""
         },
         "exclude-from-classmap": [
-            "/Tests/"
+            "/Tests/",
+            "/docker/"
         ]
     },
     "autoload-dev": {
