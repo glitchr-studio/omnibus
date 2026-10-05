@@ -5,6 +5,7 @@
 #   docker compose run --rm omnibus rate ups --to GB    # the carrier's prices for a parcel
 #   docker compose run --rm omnibus ship ups            # a label, saved under labels/
 #   docker compose run --rm omnibus track ups 1Z...
+#   docker compose run --rm omnibus bare --recorded     # plain PHP: no bundle, no container, and what PHP loaded
 #   docker compose run --rm omnibus test                # every package's tests
 #
 # Carriers come from GitHub (branch 2.x) unless their checkout sits under

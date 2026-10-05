@@ -1,0 +1,9 @@
+{
+  "RateResponse": {
+    "Response": {"ResponseStatus": {"Code": "1", "Description": "Success"}},
+    "RatedShipment": [
+      {"Service": {"Code": "07"}, "TotalCharges": {"CurrencyCode": "EUR", "MonetaryValue": "42.10"}, "GuaranteedDelivery": {"BusinessDaysInTransit": "1"}},
+      {"Service": {"Code": "11"}, "TotalCharges": {"CurrencyCode": "EUR", "MonetaryValue": "12.90"}}
+    ]
+  }
+}

@@ -1,0 +1,142 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Omnibus in bare PHP: no bundle, no container, no console component. The
+ * registry is built by hand from the carrier packages installed, each
+ * gateway that can be built says what it does, a parcel of 500 g from Paris
+ * to Strasbourg is priced and handed over through omnibus/offline - the
+ * shop's own rates, no network - and UPS is asked what it would cost; then
+ * the script lists what PHP loaded on the way.
+ *
+ *   docker compose run --rm omnibus bare --recorded   # UPS on the answers kept in recorded/ instead of the calls
+ *   docker compose run --rm omnibus bare              # the gateways of .env; UPS asked when its keys are set
+ *   docker compose run --rm omnibus bare --json       # the same, whole: every class loaded, every file since the autoloader
+ *
+ * It exits 1 when a class of a framework was loaded. Nothing is booked: UPS
+ * is asked for prices only. The answers in recorded/ were written in the
+ * shape UPS's Rating API documents (those of omnibus/ups's tests), on
+ * credentials that are manifestly not credentials.
+ *
+ * OMNIBUS_AUTOLOAD names another autoloader than the harness's.
+ */
+
+use Omnibus\Model\Address;
+use Omnibus\Model\Parcel;
+use Omnibus\Model\Rate;
+use Omnibus\Model\Shipment;
+use Omnibus\Registry;
+use Omnibus\Request;
+use Symfony\Component\HttpClient\HttpClient;
+use Symfony\Component\HttpClient\MockHttpClient;
+use Symfony\Component\HttpClient\Response\MockResponse;
+
+require getenv('OMNIBUS_AUTOLOAD') ?: '/harness/vendor/autoload.php';
+// What Composer requires for every package installed (their autoload.files) is loaded before this line,
+// whatever the script does: not counted below.
+$autoloaded = get_included_files();
+
+$recorded = \in_array('--recorded', $argv, true);
+$http = !$recorded ? null : new MockHttpClient(static function (string $method, string $url): MockResponse {
+    $path = (string) parse_url($url, \PHP_URL_PATH);
+    $file = match (true) {
+        str_ends_with($path, '/oauth/token') => 'ups-oauth-token.json',
+        str_ends_with($path, '/Shop') => 'ups-rating-shop.json',
+        default => null,
+    };
+
+    return null !== $file
+        ? new MockResponse((string) file_get_contents(__DIR__.'/../recorded/'.$file), ['response_headers' => ['Content-Type' => 'application/json']])
+        : new MockResponse('{"response":{"errors":[{"code":"404","message":"No such resource"}]}}', ['http_code' => 404]);
+});
+
+// A carrier that calls an API takes the HTTP client to call with; omnibus/offline and omnibus/colissimo call nothing and take none.
+$factories = [];
+foreach (require __DIR__.'/../plugins.php' as $slug => $namespace) {
+    $class = 'Omnibus\\'.$namespace.'\\'.$namespace.'GatewayFactory';
+    if (class_exists($class)) {
+        $factories[] = \in_array($slug, ['offline', 'colissimo'], true) ? new $class() : new $class($http ??= HttpClient::create(['timeout' => 30]));
+    }
+}
+$installed = array_map(static fn ($factory) => $factory->getName(), $factories);
+
+// The shop's own prices and counter, whatever the mode: omnibus/offline needs no key.
+$offline = ['factory' => 'offline', 'options' => [
+    'rates' => [
+        ['service' => 'courier', 'label' => 'Coursier', 'currency' => 'EUR', 'bands' => [1000 => 690, 30000 => 1290]],
+        ['service' => 'pickup', 'label' => 'Retrait en boutique', 'to_pickup_point' => true, 'bands' => [30000 => 0]],
+    ],
+    'tracking_url' => 'https://www.laposte.fr/outils/suivre-vos-envois?code={number}',
+    'pickup_points' => [['id' => 'shop', 'name' => 'La boutique', 'street' => ['1 rue de Rivoli'], 'postcode' => '75001', 'city' => 'Paris', 'country' => 'FR']],
+]];
+if ($recorded) {
+    // Manifestly not credentials: nothing is called.
+    $config = ['offline' => $offline, 'ups' => ['factory' => 'ups', 'options' => ['client_id' => 'ups_test_not_a_real_client_id', 'client_secret' => 'ups_test_not_a_real_secret', 'account_number' => '000000', 'sandbox' => true]]];
+} else {
+    $set = static fn (string $key): bool => false !== getenv($key) && '' !== getenv($key);
+    $config = array_filter(require __DIR__.'/../config/gateways.php', static fn (array $gateway) => !array_filter($gateway['needs'], static fn (string $key) => !$set($key)));
+    $config = ['offline' => $offline] + array_map(static fn (array $gateway) => ['factory' => $gateway['factory'], 'options' => array_filter($gateway['options'], static fn ($value) => null !== $value)], $config);
+}
+$config = array_filter($config, static fn (array $gateway) => \in_array($gateway['factory'], $installed, true));
+$registry = new Registry($factories, $config);
+
+$requests = ['rate' => Request\Rating::class, 'ship' => Request\Shipping::class, 'track' => Request\Tracking::class, 'pickup' => Request\Pickup::class, 'slip' => Request\GetSlip::class, 'cancel' => Request\Cancel::class];
+$report = ['recorded' => $recorded, 'factories' => $installed, 'gateways' => [], 'offline' => null, 'ups' => null];
+foreach ($registry->all() as $name => $gateway) {
+    $report['gateways'][$name] = array_keys(array_filter($requests, static fn (string $class) => $gateway->supports($class)));
+}
+
+$shipment = new Shipment(
+    new Address('La boutique', ['1 rue de Rivoli'], '75001', 'Paris', 'FR'),
+    new Address('Camille Durand', ['12 rue des Juifs'], '67000', 'Strasbourg', 'FR'),
+    [new Parcel(500, 30, 20, 10)],
+    reference: 'ORDER-1042',
+    options: ['tracking_number' => '6A12345678901'],
+);
+$rates = static fn (array $rates): array => array_map(static fn (Rate $rate) => ['service' => $rate->service, 'label' => $rate->label, 'amount' => $rate->amount, 'currency' => $rate->currency, 'days' => $rate->days, 'to_pickup_point' => $rate->toPickupPoint], $rates);
+
+if ($registry->has('offline')) {
+    $gateway = $registry->get('offline');
+    $label = $gateway->ship($shipment);
+    $points = $gateway->pickupPoints($shipment->recipient);
+    $report['offline'] = [
+        'rates' => $rates($gateway->rate($shipment)),
+        'label' => ['tracking_number' => $label->trackingNumber, 'tracking_url' => $label->trackingUrl, 'has_document' => null !== $label->content],
+        'pickup_points' => array_map(static fn ($point) => $point->id.': '.$point->name, $points),
+    ];
+}
+if ($registry->has('ups')) {
+    $report['ups'] = ['rates' => $rates($registry->get('ups')->rate($shipment))];
+}
+
+// What PHP loaded to get there: the proof that no framework was needed.
+$report['symbols'] = [...get_declared_classes(), ...get_declared_interfaces(), ...get_declared_traits()];
+$report['files'] = array_values(array_diff(get_included_files(), $autoloaded));
+$framework = array_values(preg_grep('~^(?:Symfony\\\\Component\\\\(?:DependencyInjection|Config|HttpKernel|HttpFoundation)|Symfony\\\\Bundle|Symfony\\\\Bridge|Doctrine|Twig)\\\\~', $report['symbols']));
+$symfony = array_values(array_unique(array_map(static fn (string $s) => implode('\\', \array_slice(explode('\\', $s), 0, 3)), preg_grep('~^Symfony\\\\(?!Polyfill)~', $report['symbols']))));
+sort($symfony);
+
+if (\in_array('--json', $argv, true)) {
+    echo json_encode($report, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE), "\n";
+    exit($framework ? 1 : 0);
+}
+
+$price = static fn (array $rate): string => sprintf('%s %s (%s%s)', number_format($rate['amount'] / 100, 2, '.', ''), $rate['currency'], $rate['label'], null === $rate['days'] ? '' : ', '.$rate['days'].' day'.(1 === $rate['days'] ? '' : 's'));
+echo "Omnibus in bare PHP: the registry built by hand, no bundle, no container.\n\n";
+foreach ($report['gateways'] as $name => $does) {
+    printf("  %-14s %s\n", $name, implode(' ', $does));
+}
+if (!$installed) {
+    echo "  no omnibus/* carrier package is installed\n";
+}
+if ($offline = $report['offline']) {
+    echo "\nomnibus/offline, 500 g from Paris to Strasbourg (the shop's own rates, no network):\n";
+    printf("  %s\n  handed over under %s, followed at %s\n  collected at %s\n", implode(', ', array_map($price, $offline['rates'])), $offline['label']['tracking_number'], $offline['label']['tracking_url'], implode(', ', $offline['pickup_points']));
+}
+if ($ups = $report['ups']) {
+    echo "\nomnibus/ups, the same parcel, ", $recorded ? 'from the answers kept in recorded/' : 'asked of UPS', ":\n";
+    printf("  %s\n", implode(', ', array_map($price, $ups['rates'])) ?: 'no price');
+}
+echo "\nLoaded from Symfony: ", implode(', ', $symfony) ?: 'nothing', "\n";
+echo 'Classes of a framework (DependencyInjection, Config, HttpKernel, HttpFoundation, a bundle, a bridge, Doctrine, Twig): ', $framework ? implode(', ', $framework) : 'none', "\n";
+exit($framework ? 1 : 0);
